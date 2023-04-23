@@ -1,3 +1,6 @@
+require 'i2c'
+require 'mouse'
+
 # Initialize a Keyboard
 kbd = Keyboard.new
 
@@ -58,20 +61,55 @@ rgb = RGB.new(
   22,   # size of backlight pixel
   false # 32bit data will be sent to a pixel if true while 24bit if false
 )
-# Set an effect
-#  `nil` or `:off` for turning off, `:breathing` for "color breathing", `:rainbow` for "rainbow snaking"
-
-RGB_COL_COUNT = 12
-RGB_ROW_COUNT = 4
-
 
 rgb.effect = :swirl
 rgb.speed = 22
-# rgb.effect = :breathing
-# Set an action when you input
-#  `nil` or `:off` for turning off
-# rgb.action = :thunder
-# Append the feature. Will possibly be able to write `Keyboard#append(OLED.new)` in the future
 kbd.append rgb
+
+MTCH6102_ADDR = 0x25
+MTCH6102_READ_ADDR = 0x25
+MTCH6102_REG_STAT = 0x10
+MTCH6102_REG_CMD = 0x04
+MTCH6102_REG_MODE = 0x05
+MTCH6102_REG_CFG_START = 0x20
+MTCH6102_REG_CFG_END = 0x43
+MTCH6102_REG_HOLD_TIME = 0x3C
+config = [0x09, 0x06, 0x06, 0x37, 0x28, 0x85, 0x02, 0x4C, 0x06, 0x10, 0x04, 0x01, 0x01, 0x0A, 0x00, 0x14, 0x14, 0x02, 0x01, 0x01, 0x05, 0x00, 0x00, 0x40, 0x40, 0x19, 0x19, 0x40, 0x32, 0x00, 0x0C, 0x20, 0x04, 0x2D, 0x2D, 0x25]
+
+i2c = I2C.new({
+  unit: :RP2040_I2C1,
+  frequency: 100_000,
+  sda_pin: 2,
+  scl_pin: 3
+})
+
+# Init MTCH6102
+i2c.write(MTCH6102_ADDR, MTCH6102_REG_MODE)
+i2c.write(MTCH6102_ADDR, MTCH6102_REG_STAT)
+i2c.write(MTCH6102_ADDR, MTCH6102_REG_CFG_START)
+i2c.write(MTCH6102_ADDR, config)
+i2c.write(MTCH6102_ADDR, MTCH6102_REG_CMD)
+i2c.write(MTCH6102_ADDR, 0x20)
+i2c.write(MTCH6102_ADDR, MTCH6102_REG_HOLD_TIME)
+i2c.write(MTCH6102_ADDR, 0x10)
+
+buf = {
+  x: 0,
+  y: 0,
+}
+
+mouse = Mouse.new({driver: i2c})
+mouse.task do |mouse, kbd|
+  mouse.driver.write(MTCH6102_ADDR, MTCH6102_REG_STAT)
+  read = mouse.driver.read(MTCH6102_ADDR, 6).bytes
+  y = -(buf[:y] - read[1]) * 10
+  x = -(buf[:x] - read[2]) * 10
+
+  USB.merge_mouse_report(0, x, y, 0, 0)
+  puts("mouse report: #{read}")
+  buf[:y] = read[1]
+  buf[:x] = read[2]
+end
+kbd.append mouse
 
 kbd.start!
