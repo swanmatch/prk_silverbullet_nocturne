@@ -1,6 +1,85 @@
 require 'i2c'
 require 'mouse'
 
+class MTCH6102
+  ADDR = 0x25
+  READ_ADDR = 0x25
+  REG_STAT = 0x10
+  REG_CMD = 0x04
+  REG_MODE = 0x05
+  REG_CFG_START = 0x20
+  REG_CFG_END = 0x43
+  REG_HOLD_TIME = 0x3C
+
+  # typedef enum {
+  #   TOUCH   = 1 << 0,
+  #   GESTURE = 1 << 1,
+  # } MTCH6102_STAT_BIT;
+  # typedef enum { GES_TAP = 0x10, GES_HOLD = 0x11, GES_DOUBLE_TAP = 0x20 } MTCH6102_GESTURE_CODE;
+
+  attr_reader :x, :y, :buf_x, :buf_y
+
+  def initialize(i2c)
+    @i2c = i2c
+    @buf_x = 0
+    @buf_y = 0
+  end
+
+  def device_init
+    config = [
+      0x09, 0x06, 0x06, 0x37, 0x28, 0x85, 0x02, 0x4C, 0x06, 0x10, 0x04, 0x01, 0x01, 0x0A, 0x00, 0x14, 0x14, 0x02,
+      0x01, 0x01, 0x05, 0x00, 0x00, 0x40, 0x40, 0x19, 0x19, 0x40, 0x32, 0x00, 0x0C, 0x20, 0x04, 0x2D, 0x2D, 0x25
+    ]
+    @i2c.write(ADDR, REG_MODE)
+    @i2c.write(ADDR, REG_STAT)
+    @i2c.write(ADDR, REG_CFG_START)
+    @i2c.write(ADDR, config)
+    @i2c.write(ADDR, REG_CMD)
+    @i2c.write(ADDR, 0x20)
+    @i2c.write(ADDR, REG_HOLD_TIME)
+    @i2c.write(ADDR, 0x10)
+  end
+
+  def reload()
+    @i2c.write(ADDR, REG_STAT)
+    read = @i2c.read(ADDR, 6).bytes
+    self.process_mtch6102(*read)
+  rescue
+    puts 'i2c error'
+  end
+
+  def process_mtch6102(counter, y, x, what, is, this)
+    # if (touch_state && (data->status & TOUCH))
+    @x = (x - @buf_x) * 10
+    @y = (y - @buf_y) * 10
+    # end
+
+    # TODO
+    # if ((data->status & GESTURE) && (data->gesture == GES_TAP || data->gesture == GES_DOUBLE_TAP)) {
+    #     rep_mouse->buttons = 1;
+    #     release_button     = true;
+    #     send_flag          = true;
+    # } elsif ((data->status & GESTURE) && (data->gesture == GES_HOLD)) {
+    #     rep_mouse->buttons = 2;
+    #     release_button     = true;
+    #     send_flag          = true;
+    # } elsif (release_button) {
+    #     rep_mouse->buttons = 0;
+    #     send_flag          = true;
+    # }
+
+    # if (pointing_device_button != 0) {
+    #     rep_mouse->buttons = pointing_device_button;
+    # }
+
+    # touch_state = data->status & TOUCH;
+    @buf_x = x
+    @buf_y = y
+
+    [counter, y, x, what, is, this]
+  end
+end
+
 # Initialize a Keyboard
 kbd = Keyboard.new
 
@@ -66,16 +145,6 @@ rgb.effect = :swirl
 rgb.speed = 22
 kbd.append rgb
 
-MTCH6102_ADDR = 0x25
-MTCH6102_READ_ADDR = 0x25
-MTCH6102_REG_STAT = 0x10
-MTCH6102_REG_CMD = 0x04
-MTCH6102_REG_MODE = 0x05
-MTCH6102_REG_CFG_START = 0x20
-MTCH6102_REG_CFG_END = 0x43
-MTCH6102_REG_HOLD_TIME = 0x3C
-config = [0x09, 0x06, 0x06, 0x37, 0x28, 0x85, 0x02, 0x4C, 0x06, 0x10, 0x04, 0x01, 0x01, 0x0A, 0x00, 0x14, 0x14, 0x02, 0x01, 0x01, 0x05, 0x00, 0x00, 0x40, 0x40, 0x19, 0x19, 0x40, 0x32, 0x00, 0x0C, 0x20, 0x04, 0x2D, 0x2D, 0x25]
-
 i2c = I2C.new({
   unit: :RP2040_I2C1,
   frequency: 100_000,
@@ -83,32 +152,16 @@ i2c = I2C.new({
   scl_pin: 3
 })
 
-# Init MTCH6102
-i2c.write(MTCH6102_ADDR, MTCH6102_REG_MODE)
-i2c.write(MTCH6102_ADDR, MTCH6102_REG_STAT)
-i2c.write(MTCH6102_ADDR, MTCH6102_REG_CFG_START)
-i2c.write(MTCH6102_ADDR, config)
-i2c.write(MTCH6102_ADDR, MTCH6102_REG_CMD)
-i2c.write(MTCH6102_ADDR, 0x20)
-i2c.write(MTCH6102_ADDR, MTCH6102_REG_HOLD_TIME)
-i2c.write(MTCH6102_ADDR, 0x10)
+# # Init MTCH6102
+mtch6102 = MTCH6102.new(i2c)
+mtch6102.device_init
 
-buf = {
-  x: 0,
-  y: 0,
-}
-
-mouse = Mouse.new({driver: i2c})
+mouse = Mouse.new({driver: mtch6102})
 mouse.task do |mouse, kbd|
-  mouse.driver.write(MTCH6102_ADDR, MTCH6102_REG_STAT)
-  read = mouse.driver.read(MTCH6102_ADDR, 6).bytes
-  y = -(buf[:y] - read[1]) * 10
-  x = -(buf[:x] - read[2]) * 10
+  report = mouse.driver.reload
+  puts("mouse report: #{report}")
 
-  USB.merge_mouse_report(0, x, y, 0, 0)
-  puts("mouse report: #{read}")
-  buf[:y] = read[1]
-  buf[:x] = read[2]
+  USB.merge_mouse_report(0, mouse.driver.x, mouse.driver.y, 0, 0)
 end
 kbd.append mouse
 
