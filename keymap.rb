@@ -3,7 +3,6 @@ require 'mouse'
 
 class MTCH6102
   ADDR = 0x25
-  READ_ADDR = 0x25
   REG_STAT = 0x10
   REG_CMD = 0x04
   REG_MODE = 0x05
